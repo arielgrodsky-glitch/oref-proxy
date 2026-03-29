@@ -1,12 +1,16 @@
 const https = require('https');
 const http = require('http');
+const nodemailer = require('nodemailer');
 
 const PORT = process.env.PORT || 3000;
-
-// ── Set your Anthropic API key here (or via environment variable) ──
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || 'YOUR_API_KEY_HERE';
-
+const GMAIL_USER = process.env.GMAIL_USER; // yourname@gmail.com
+const GMAIL_PASS = process.env.GMAIL_PASS; // 16-char app password
 const SMS_TO = '0542574433@partner.net.il';
+
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: { user: GMAIL_USER, pass: GMAIL_PASS },
+});
 
 const OREF_HEADERS = {
   'Pragma': 'no-cache',
@@ -56,43 +60,14 @@ function fetchOref(url) {
   });
 }
 
-// POST to Anthropic API (server-side, no CORS issues)
-function callAnthropic(body) {
-  return new Promise((resolve, reject) => {
-    const payload = JSON.stringify(body);
-    const options = {
-      hostname: 'api.anthropic.com',
-      path: '/v1/messages',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'mcp-client-2025-04-04',
-        'Content-Length': Buffer.byteLength(payload),
-      },
-    };
-    const req = https.request(options, (res) => {
-      const chunks = [];
-      res.on('data', c => chunks.push(c));
-      res.on('end', () => {
-        try { resolve(JSON.parse(Buffer.concat(chunks).toString())); }
-        catch(e) { reject(e); }
-      });
-    });
-    req.on('error', reject);
-    req.setTimeout(20000, () => { req.destroy(); reject(new Error('Anthropic timeout')); });
-    req.write(payload);
-    req.end();
-  });
-}
-
-// Read request body
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     req.on('data', c => chunks.push(c));
-    req.on('end', () => { try { resolve(JSON.parse(Buffer.concat(chunks).toString())); } catch(e) { resolve({}); } });
+    req.on('end', () => {
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString())); }
+      catch(e) { resolve({}); }
+    });
     req.on('error', reject);
   });
 }
@@ -136,30 +111,22 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // ── SMS endpoint ──
-  // POST /send-sms  { title: string, areas: string[] }
+  // ── SMS via Gmail SMTP ──
   if (url === '/send-sms' && req.method === 'POST') {
     try {
       const body = await readBody(req);
       const title = body.title || 'Alert';
       const areas = Array.isArray(body.areas) ? body.areas : [];
-      const emailBody = `Alert: ${title}\nAreas: ${areas.join(', ')}\nTime: ${new Date().toLocaleTimeString('he-IL')}`;
 
-      const result = await callAnthropic({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 300,
-        mcp_servers: [{ type: 'url', url: 'https://gmail.mcp.claude.com/mcp', name: 'gmail' }],
-        messages: [{
-          role: 'user',
-          content: `Send an email using Gmail. To: ${SMS_TO}. Subject: ${title}. Body: ${emailBody}. Just send it immediately, no confirmation needed.`
-        }]
+      await transporter.sendMail({
+        from: GMAIL_USER,
+        to: SMS_TO,
+        subject: title,
+        text: `Alert: ${title}\nAreas: ${areas.join(', ')}\nTime: ${new Date().toLocaleTimeString('he-IL')}`,
       });
 
-      const txt = (result.content || []).map(b => b.text || '').join(' ').toLowerCase();
-      const ok = txt.includes('sent') || txt.includes('success') || txt.includes('email') || txt.includes('delivered');
-
-      res.writeHead(ok ? 200 : 500, CORS_HEADERS);
-      return res.end(JSON.stringify({ ok, message: ok ? 'SMS sent' : 'Unexpected response', raw: txt.slice(0, 100) }));
+      res.writeHead(200, CORS_HEADERS);
+      return res.end(JSON.stringify({ ok: true, message: 'SMS sent' }));
     } catch (e) {
       res.writeHead(500, CORS_HEADERS);
       return res.end(JSON.stringify({ ok: false, error: e.message }));
@@ -174,5 +141,5 @@ server.listen(PORT, () => {
   console.log(`✅ Oref proxy running on http://localhost:${PORT}`);
   console.log(`   /alerts   → live active alerts`);
   console.log(`   /history  → last ~2 hours of alerts`);
-  console.log(`   /send-sms → POST { title, areas } → sends SMS via Gmail`);
+  console.log(`   /send-sms → POST { title, areas } → SMS to ${SMS_TO}`);
 });
