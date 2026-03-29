@@ -4,7 +4,7 @@ const http = require('http');
 const PORT = process.env.PORT || 3000;
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
 const FROM_EMAIL = process.env.FROM_EMAIL || 'groariel@gmail.com';
-const GMAIL = 'groariel@gmail.com';
+const GMAIL = process.env.NOTIFY_EMAIL || 'groariel@gmail.com';
 const SMS_GATEWAY = '0542574433@partner.net.il';
 
 const OREF_HEADERS = {
