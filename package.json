@@ -1,14 +1,12 @@
 {
   "name": "oref-proxy",
   "version": "1.0.0",
-  "description": "CORS proxy for Pikud HaOref live alerts with SMS",
+  "description": "CORS proxy for Pikud HaOref live alerts with SMS via SendGrid",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
-  "dependencies": {
-    "nodemailer": "^6.9.13"
-  },
+  "dependencies": {},
   "engines": {
     "node": ">=16"
   }

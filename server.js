@@ -1,16 +1,10 @@
 const https = require('https');
 const http = require('http');
-const nodemailer = require('nodemailer');
 
 const PORT = process.env.PORT || 3000;
-const GMAIL_USER = process.env.GMAIL_USER; // yourname@gmail.com
-const GMAIL_PASS = process.env.GMAIL_PASS; // 16-char app password
-const SMS_TO = '0542574433@partner.net.il';
-
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: { user: GMAIL_USER, pass: GMAIL_PASS },
-});
+const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
+const FROM_EMAIL = process.env.FROM_EMAIL || 'groariel@gmail.com'; // must be verified in SendGrid
+const SMS_TO_EMAIL = '0542574433@partner.net.il';
 
 const OREF_HEADERS = {
   'Pragma': 'no-cache',
@@ -57,6 +51,50 @@ function fetchOref(url) {
     });
     req.on('error', reject);
     req.setTimeout(8000, () => { req.destroy(); reject(new Error('Timeout')); });
+  });
+}
+
+// ── Send email via SendGrid HTTP API (port 443 — works on Render free tier) ──
+function sendViaSendGrid(subject, body) {
+  return new Promise((resolve, reject) => {
+    if (!SENDGRID_API_KEY) return reject(new Error('SENDGRID_API_KEY not set'));
+
+    const payload = JSON.stringify({
+      personalizations: [{ to: [{ email: SMS_TO_EMAIL }] }],
+      from: { email: FROM_EMAIL },
+      subject: subject,
+      content: [{ type: 'text/plain', value: body }],
+    });
+
+    const options = {
+      hostname: 'api.sendgrid.com',
+      path: '/v3/mail/send',
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${SENDGRID_API_KEY}`,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload),
+      },
+    };
+
+    const req = https.request(options, (res) => {
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => {
+        // SendGrid returns 202 on success, no body
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolve({ ok: true });
+        } else {
+          const msg = Buffer.concat(chunks).toString();
+          reject(new Error(`SendGrid ${res.statusCode}: ${msg}`));
+        }
+      });
+    });
+
+    req.on('error', reject);
+    req.setTimeout(10000, () => { req.destroy(); reject(new Error('SendGrid timeout')); });
+    req.write(payload);
+    req.end();
   });
 }
 
@@ -111,23 +149,22 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // ── SMS via Gmail SMTP ──
+  // ── SMS via SendGrid → Partner email-to-SMS gateway ──
   if (url === '/send-sms' && req.method === 'POST') {
     try {
       const body = await readBody(req);
       const title = body.title || 'Alert';
       const areas = Array.isArray(body.areas) ? body.areas : [];
 
-      await transporter.sendMail({
-        from: GMAIL_USER,
-        to: SMS_TO,
-        subject: title,
-        text: `Alert: ${title}\nAreas: ${areas.join(', ')}\nTime: ${new Date().toLocaleTimeString('he-IL')}`,
-      });
+      const subject = title;
+      const text = `${title}\n${areas.join(', ')}\n${new Date().toLocaleTimeString('he-IL')}`;
+
+      await sendViaSendGrid(subject, text);
 
       res.writeHead(200, CORS_HEADERS);
-      return res.end(JSON.stringify({ ok: true, message: 'SMS sent' }));
+      return res.end(JSON.stringify({ ok: true, message: 'SMS sent via SendGrid' }));
     } catch (e) {
+      console.error('SMS error:', e.message);
       res.writeHead(500, CORS_HEADERS);
       return res.end(JSON.stringify({ ok: false, error: e.message }));
     }
@@ -141,5 +178,6 @@ server.listen(PORT, () => {
   console.log(`✅ Oref proxy running on http://localhost:${PORT}`);
   console.log(`   /alerts   → live active alerts`);
   console.log(`   /history  → last ~2 hours of alerts`);
-  console.log(`   /send-sms → POST { title, areas } → SMS to ${SMS_TO}`);
+  console.log(`   /send-sms → POST { title, areas } → SMS to ${SMS_TO_EMAIL}`);
+  if (!SENDGRID_API_KEY) console.warn('⚠️  SENDGRID_API_KEY not set — SMS will fail');
 });
