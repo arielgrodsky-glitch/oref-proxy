@@ -1,0 +1,12 @@
+{
+  "name": "oref-proxy",
+  "version": "1.0.0",
+  "description": "CORS proxy for Pikud HaOref live alerts",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=16"
+  }
+}
