@@ -4,21 +4,29 @@ const http = require('http');
 const PORT = process.env.PORT || 3000;
 
 // Twilio — set all of these in Render environment variables
-const TWILIO_SID        = process.env.TWILIO_SID;        // AC...
-const TWILIO_API_KEY    = process.env.TWILIO_API_KEY;    // SK...
-const TWILIO_API_SECRET = process.env.TWILIO_API_SECRET; // secret
-const TWILIO_FROM       = process.env.TWILIO_FROM;       // +12602365615
+const TWILIO_SID        = process.env.TWILIO_SID;
+const TWILIO_API_KEY    = process.env.TWILIO_API_KEY;
+const TWILIO_API_SECRET = process.env.TWILIO_API_SECRET;
+const TWILIO_FROM       = process.env.TWILIO_FROM;
 const SMS_TO            = process.env.SMS_TO || '+972542574433';
 
 const OREF_HEADERS = {
   'Pragma': 'no-cache',
-  'Cache-Control': 'max-age=0',
-  'Referer': 'https://www.oref.org.il/11226-he/pakar.aspx',
+  'Cache-Control': 'no-cache',
+  'Referer': 'https://www.oref.org.il/',
+  'Origin': 'https://www.oref.org.il',
   'X-Requested-With': 'XMLHttpRequest',
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  'Accept': '*/*',
-  'Accept-Language': 'he-IL,he;q=0.9',
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+  'Accept': 'application/json, text/javascript, */*; q=0.01',
+  'Accept-Language': 'he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7',
+  'Accept-Encoding': 'gzip, deflate, br',
   'Connection': 'keep-alive',
+  'sec-ch-ua': '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+  'sec-ch-ua-mobile': '?0',
+  'sec-ch-ua-platform': '"Windows"',
+  'Sec-Fetch-Dest': 'empty',
+  'Sec-Fetch-Mode': 'cors',
+  'Sec-Fetch-Site': 'same-origin',
 };
 
 const CORS_HEADERS = {
@@ -71,7 +79,6 @@ function sendSms(body) {
       Body: body,
     }).toString();
 
-    // API Key auth: use API Key SID + Secret (not Account SID + Auth Token)
     const auth = Buffer.from(`${TWILIO_API_KEY}:${TWILIO_API_SECRET}`).toString('base64');
 
     const options = {
@@ -140,6 +147,7 @@ const server = http.createServer(async (req, res) => {
       if (!text) return res.end(JSON.stringify({ id: null, cat: null, title: '', data: [] }));
       return res.end(text);
     } catch (e) {
+      console.error('Alerts fetch error:', e.message);
       res.writeHead(500, CORS_HEADERS);
       return res.end(JSON.stringify({ error: e.message }));
     }
@@ -153,12 +161,12 @@ const server = http.createServer(async (req, res) => {
       if (!text) return res.end('[]');
       return res.end(text);
     } catch (e) {
+      console.error('History fetch error:', e.message);
       res.writeHead(500, CORS_HEADERS);
       return res.end(JSON.stringify({ error: e.message }));
     }
   }
 
-  // ── SMS via Twilio ──
   if (url === '/send-sms' && req.method === 'POST') {
     try {
       const body = await readBody(req);
