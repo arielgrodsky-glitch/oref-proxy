@@ -2,10 +2,13 @@ const https = require('https');
 const http = require('http');
 
 const PORT = process.env.PORT || 3000;
-const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
-const FROM_EMAIL = process.env.FROM_EMAIL || 'groariel@gmail.com';
-const GMAIL = process.env.NOTIFY_EMAIL || 'groariel@gmail.com';
-const SMS_GATEWAY = '0542574433@partner.net.il';
+
+// Twilio — set all of these in Render environment variables
+const TWILIO_SID        = process.env.TWILIO_SID;        // AC...
+const TWILIO_API_KEY    = process.env.TWILIO_API_KEY;    // SK...
+const TWILIO_API_SECRET = process.env.TWILIO_API_SECRET; // secret
+const TWILIO_FROM       = process.env.TWILIO_FROM;       // +12602365615
+const SMS_TO            = process.env.SMS_TO || '+972542574433';
 
 const OREF_HEADERS = {
   'Pragma': 'no-cache',
@@ -55,25 +58,29 @@ function fetchOref(url) {
   });
 }
 
-// ── Send to one recipient via SendGrid ──
-function sendOne(toEmail, subject, body) {
+// ── Send SMS via Twilio REST API (API Key auth) ──
+function sendSms(body) {
   return new Promise((resolve, reject) => {
-    if (!SENDGRID_API_KEY) return reject(new Error('SENDGRID_API_KEY not set'));
+    if (!TWILIO_SID || !TWILIO_API_KEY || !TWILIO_API_SECRET) {
+      return reject(new Error('Twilio credentials not set in environment variables'));
+    }
 
-    const payload = JSON.stringify({
-      personalizations: [{ to: [{ email: toEmail }] }],
-      from: { email: FROM_EMAIL },
-      subject: subject,
-      content: [{ type: 'text/plain', value: body }],
-    });
+    const payload = new URLSearchParams({
+      To:   SMS_TO,
+      From: TWILIO_FROM,
+      Body: body,
+    }).toString();
+
+    // API Key auth: use API Key SID + Secret (not Account SID + Auth Token)
+    const auth = Buffer.from(`${TWILIO_API_KEY}:${TWILIO_API_SECRET}`).toString('base64');
 
     const options = {
-      hostname: 'api.sendgrid.com',
-      path: '/v3/mail/send',
+      hostname: 'api.twilio.com',
+      path: `/2010-04-01/Accounts/${TWILIO_SID}/Messages.json`,
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${SENDGRID_API_KEY}`,
-        'Content-Type': 'application/json',
+        'Authorization': `Basic ${auth}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
         'Content-Length': Buffer.byteLength(payload),
       },
     };
@@ -82,40 +89,22 @@ function sendOne(toEmail, subject, body) {
       const chunks = [];
       res.on('data', c => chunks.push(c));
       res.on('end', () => {
+        const text = Buffer.concat(chunks).toString();
         if (res.statusCode >= 200 && res.statusCode < 300) {
-          console.log(`✅ Email sent to ${toEmail}`);
-          resolve({ ok: true, to: toEmail });
+          console.log(`✅ SMS sent to ${SMS_TO}`);
+          resolve({ ok: true });
         } else {
-          const msg = Buffer.concat(chunks).toString();
-          console.error(`❌ SendGrid failed for ${toEmail}: ${res.statusCode} ${msg}`);
-          reject(new Error(`SendGrid ${res.statusCode}: ${msg}`));
+          console.error(`❌ Twilio error ${res.statusCode}: ${text}`);
+          reject(new Error(`Twilio ${res.statusCode}: ${text}`));
         }
       });
     });
 
     req.on('error', reject);
-    req.setTimeout(10000, () => { req.destroy(); reject(new Error('SendGrid timeout')); });
+    req.setTimeout(10000, () => { req.destroy(); reject(new Error('Twilio timeout')); });
     req.write(payload);
     req.end();
   });
-}
-
-// ── Send to BOTH Gmail and SMS gateway in parallel ──
-async function sendAlert(title, areas) {
-  const subject = title;
-  const text = `${title}\n${areas.join(', ')}\n${new Date().toLocaleTimeString('he-IL')}`;
-
-  const results = await Promise.allSettled([
-    sendOne(GMAIL, subject, text),       // always goes to Gmail inbox
-    sendOne(SMS_GATEWAY, subject, text), // also tries Partner SMS gateway
-  ]);
-
-  return {
-    gmailOk:  results[0].status === 'fulfilled',
-    smsOk:    results[1].status === 'fulfilled',
-    gmailErr: results[0].reason?.message || null,
-    smsErr:   results[1].reason?.message || null,
-  };
 }
 
 function readBody(req) {
@@ -169,23 +158,18 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // ── SMS via Twilio ──
   if (url === '/send-sms' && req.method === 'POST') {
     try {
       const body = await readBody(req);
       const title = body.title || 'Alert';
       const areas = Array.isArray(body.areas) ? body.areas : [];
+      const msg = `${title}\n${areas.join(', ')}\n${new Date().toLocaleTimeString('he-IL')}`;
 
-      const result = await sendAlert(title, areas);
-      console.log('Send result:', JSON.stringify(result));
+      await sendSms(msg);
 
       res.writeHead(200, CORS_HEADERS);
-      return res.end(JSON.stringify({
-        ok: result.gmailOk || result.smsOk,
-        gmailOk:  result.gmailOk,
-        smsOk:    result.smsOk,
-        gmailErr: result.gmailErr,
-        smsErr:   result.smsErr,
-      }));
+      return res.end(JSON.stringify({ ok: true, message: 'SMS sent via Twilio' }));
     } catch (e) {
       console.error('SMS error:', e.message);
       res.writeHead(500, CORS_HEADERS);
@@ -201,6 +185,6 @@ server.listen(PORT, () => {
   console.log(`✅ Oref proxy running on http://localhost:${PORT}`);
   console.log(`   /alerts   → live active alerts`);
   console.log(`   /history  → last ~2 hours of alerts`);
-  console.log(`   /send-sms → sends to Gmail (${GMAIL}) + SMS gateway (${SMS_GATEWAY})`);
-  if (!SENDGRID_API_KEY) console.warn('⚠️  SENDGRID_API_KEY not set — SMS will fail');
+  console.log(`   /send-sms → SMS to ${SMS_TO} via Twilio`);
+  if (!TWILIO_SID) console.warn('⚠️  Twilio credentials not set!');
 });
